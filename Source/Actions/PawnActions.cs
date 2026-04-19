@@ -201,10 +201,17 @@ namespace RimMind.Actions.Actions
 
                 foreach (var thing in things)
                 {
-                    var job = scanner.JobOnThing(actor, thing, false);
-                    if (job == null) continue;
-                    actor.jobs.TryTakeOrderedJob(job, JobTag.Misc, requestQueueing);
-                    return true;
+                    try
+                    {
+                        var job = scanner.JobOnThing(actor, thing, false);
+                        if (job == null) continue;
+                        actor.jobs.TryTakeOrderedJob(job, JobTag.Misc, requestQueueing);
+                        return true;
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Warning($"[RimMind-Actions] ExecuteAuto: {wg.defName} threw for {thing}: {e.Message}");
+                    }
                 }
             }
             return false;
@@ -624,8 +631,7 @@ namespace RimMind.Actions.Actions
 
     // ─────────────────────────────────────────────
     //  eat_food
-    //  param：食物 defName 关键词（大小写不敏感，如 "Chocolate"），
-    //          留空则自动寻找当前地图上小人可食用的最高愉悦值食物。
+    //  param：食物关键词（大小写不敏感，匹配 defName 或 Label，如 "Chocolate"），留空则自动寻找最近可食用食物。
     // ─────────────────────────────────────────────
     public class EatFoodAction : IActionRule
     {

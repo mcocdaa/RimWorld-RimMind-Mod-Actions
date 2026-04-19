@@ -78,7 +78,7 @@ Actions 本身无需额外配置，安装后自动生效。配合 RimMind-Adviso
 
 ### 意图到动作的映射
 
-AI 返回的意图 ID（如 `assign_work`、`force_rest`）自动转换为 RimWorld 游戏操作。24 个内置动作覆盖工作、社交、战斗、心情等场景。
+AI 返回的意图 ID（如 `assign_work`、`force_rest`）自动转换为 RimWorld 游戏操作。25 个内置动作覆盖工作、社交、战斗、心情等场景。
 
 ### 风险分级系统
 
@@ -86,9 +86,9 @@ AI 返回的意图 ID（如 `assign_work`、`force_rest`）自动转换为 RimWo
 
 | 等级 | 含义 | 示例 |
 |------|------|------|
-| Low | 可随时撤销 | move_to, assign_work, cancel_job |
-| Medium | 轻微副作用 | social_relax, eat_food, add_thought |
-| High | 重大行为改变 | arrest_pawn, recruit_agree, drop_weapon |
+| Low | 可随时撤销 | move_to, assign_work, cancel_job, undraft |
+| Medium | 生存/社交/工作类轻微副作用 | force_rest, eat_food, tend_pawn, rescue_pawn, draft, set_work_priority, social_dining, social_relax, give_item, romance_accept, add_thought |
+| High | 重大行为改变 | arrest_pawn, recruit_agree, drop_weapon, romance_breakup, adjust_faction, inspire_work, inspire_fight, inspire_trade |
 | Critical | 不可逆或影响全局 | trigger_mental_state, trigger_incident |
 
 ### 内置动作清单
@@ -114,7 +114,7 @@ AI 返回的意图 ID（如 `assign_work`、`force_rest`）自动转换为 RimWo
 A: Actions 本身不直接调用 AI，需要配合 Advisor 或其他模块使用。它提供动作执行能力，AI 决策由其他模块负责。
 
 **Q: 高风险动作会自动执行吗？**
-A: 配合 Advisor 使用时，高风险动作需要玩家审批才会执行。可在设置中调整自动拦截的风险级别。
+A: Actions 本身不区分自动执行和手动审批。配合 Advisor 使用时，被玩家禁用的动作不会执行。你可以在模组设置中取消勾选不想让 AI 使用的动作。
 
 **Q: 可以禁用特定动作吗？**
 A: 可以。在模组设置中按风险级别查看，勾选禁用不想要的动作。
@@ -197,7 +197,7 @@ You can disable specific actions by risk level in mod settings.
 
 ## Key Features
 
-- **Intent-to-Action Mapping**: AI intent IDs automatically convert to RimWorld operations. 24 built-in actions cover work, social, combat, mood, and more.
+- **Intent-to-Action Mapping**: AI intent IDs automatically convert to RimWorld operations. 25 built-in actions cover work, social, combat, mood, and more.
 - **Risk Level System**: Each action is tagged with risk level (Low/Medium/High/Critical). Players can disable specific actions in settings.
 - **Batch Execution**: Supports multi-step job sequences with automatic queue management.
 
@@ -207,7 +207,7 @@ You can disable specific actions by risk level in mod settings.
 A: Actions doesn't call AI directly. It needs Advisor or other modules to provide AI decisions. It provides the execution capability.
 
 **Q: Will high-risk actions execute automatically?**
-A: When used with Advisor, high-risk actions require player approval. You can adjust the auto-block risk level in settings.
+A: Actions itself does not distinguish between automatic and manual execution. When used with Advisor, actions disabled by the player will not execute. You can uncheck any action you don't want the AI to use in mod settings.
 
 **Q: Can I disable specific actions?**
 A: Yes. In mod settings, view actions by risk level and check to disable unwanted ones.

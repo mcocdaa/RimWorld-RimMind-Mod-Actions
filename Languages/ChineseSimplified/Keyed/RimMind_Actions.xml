@@ -42,7 +42,7 @@
 
     <!-- RimMindActionsMod.cs - Risk tooltips -->
     <RimMind.Actions.UI.Risk.Low>低风险 — 日常工作类动作，安全</RimMind.Actions.UI.Risk.Low>
-    <RimMind.Actions.UI.Risk.Medium>中风险 — 社交/情绪类动作，有轻微副作用</RimMind.Actions.UI.Risk.Medium>
+    <RimMind.Actions.UI.Risk.Medium>中风险 — 生存、社交或工作类动作，有轻微副作用</RimMind.Actions.UI.Risk.Medium>
     <RimMind.Actions.UI.Risk.High>高风险 — 可能影响派系关系或人物状态，谨慎开启</RimMind.Actions.UI.Risk.High>
     <RimMind.Actions.UI.Risk.Critical>极高风险 — 可触发事件/精神崩溃，不建议给 AI 使用</RimMind.Actions.UI.Risk.Critical>
 
