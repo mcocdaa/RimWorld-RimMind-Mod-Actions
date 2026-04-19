@@ -42,7 +42,7 @@
 
     <!-- RimMindActionsMod.cs - Risk tooltips -->
     <RimMind.Actions.UI.Risk.Low>Low Risk — routine actions, safe</RimMind.Actions.UI.Risk.Low>
-    <RimMind.Actions.UI.Risk.Medium>Medium Risk — social/mood actions, minor side effects</RimMind.Actions.UI.Risk.Medium>
+    <RimMind.Actions.UI.Risk.Medium>Medium Risk — survival, social, or work actions with minor side effects</RimMind.Actions.UI.Risk.Medium>
     <RimMind.Actions.UI.Risk.High>High Risk — may affect faction relations or pawn status, enable with caution</RimMind.Actions.UI.Risk.High>
     <RimMind.Actions.UI.Risk.Critical>Critical Risk — can trigger events/mental breaks, not recommended for AI</RimMind.Actions.UI.Risk.Critical>
 

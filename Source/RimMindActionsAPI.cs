@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using RimMind.Actions.Actions;
+using RimMind.Core;
 using Verse;
 
 namespace RimMind.Actions
@@ -55,6 +56,12 @@ namespace RimMind.Actions
             if (!_rules.TryGetValue(intentId, out var rule))
             {
                 Log.Warning($"[RimMind-Actions] Unknown intentId: {intentId}");
+                return false;
+            }
+
+            if (RimMindAPI.ShouldSkipAction(intentId))
+            {
+                Log.Message($"[RimMind-Actions] '{intentId}' skipped by bridge skip check.");
                 return false;
             }
 
