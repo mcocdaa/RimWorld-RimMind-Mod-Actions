@@ -36,7 +36,9 @@ Source/
 ├── Actions/
 │   ├── IActionRule.cs            动作规则接口定义
 │   ├── RiskLevel.cs              风险等级枚举（Low/Medium/High/Critical）
-│   ├── PawnActions.cs            小人基础动作（12 个）+ WorkTargetInfo 数据类
+│   ├── ActionResult.cs           动作执行结果结构体
+│   ├── ActionsBridge.cs          IAgentActionBridge 实现，桥接 Core 与 Actions 的 RiskLevel
+│   ├── PawnActions.cs            小人基础动作（12 个）+ ActionHelper 工具类 + WorkTargetInfo 数据类
 │   ├── SocialActions.cs          社交动作（5 个）
 │   ├── MoodActions.cs            心情动作（5 个）
 │   ├── RelationActions.cs        派系关系动作（2 个）
@@ -57,10 +59,12 @@ Source/
 
 ```csharp
 // 单条执行
-bool Execute(string intentId, Pawn actor, Pawn? target = null, string? param = null, bool requestQueueing = false)
+bool Execute(string intentId, Pawn actor, Pawn? target = null, string? param = null, bool requestQueueing = false, string? eventId = null)
+ActionResult ExecuteWithResult(string intentId, Pawn actor, Pawn? target = null, string? param = null, bool requestQueueing = false, string? eventId = null)
 
-// 批量执行（自动处理 Job 队列逻辑，返回成功执行条数）
+// 批量执行（自动处理 Job 队列逻辑）
 int ExecuteBatch(IReadOnlyList<BatchActionIntent> intents)
+List<ActionResult> ExecuteBatchWithResults(IReadOnlyList<BatchActionIntent> intents)
 
 // 查询可用工作目标（供 Advisor 构建 Prompt）
 List<WorkTargetInfo> GetWorkTargets(Pawn pawn, string workTypeDefName, int maxCount = 8)
@@ -68,15 +72,24 @@ List<WorkTargetInfo> GetWorkTargets(Pawn pawn, string workTypeDefName, int maxCo
 // 查询已注册动作信息
 IReadOnlyList<string> GetSupportedIntents()
 IReadOnlyList<(string intentId, string displayName, RiskLevel riskLevel)> GetActionDescriptions()
+List<StructuredTool> GetStructuredTools()
 RiskLevel? GetRiskLevel(string intentId)
 
 // 检查意图是否被玩家设置允许（Settings 未初始化时放行）
 bool IsAllowed(string intentId)
 ```
 
-**Execute 流程**：查找 IActionRule → 检查 `RimMindAPI.ShouldSkipAction(intentId)`（Core 桥接跳过检查）→ 检查 `IsAllowed(intentId)`（玩家设置）→ 调用 `rule.Execute()`
+**Execute/ExecuteWithResult 流程**：
+1. 检查 `actor == null` → 返回 Failed
+2. 检查 `!Settings.enableActions` → 返回 Failed（"Actions disabled"）
+3. 查找 `IActionRule`（找不到 → Warning + Failed）
+4. 检查 `RimMindAPI.ShouldSkipAction(intentId)`（Core 桥接跳过检查）
+5. 检查 `!Settings.IsAllowed(intentId)`（玩家设置禁用）
+6. 调用 `rule.Execute()`
+7. 发布 `ActionEvent` 到 AgentBus
 
-**ExecuteBatch 队列逻辑**：
+**ExecuteBatch/ExecuteBatchWithResults 队列逻辑**：
+- 对每个 intent 执行与单条 Execute 相同的检查（enableActions → 查找 rule → ShouldSkipAction → IsAllowed）
 - 使用 `ReferenceEqualityComparer`（按对象引用去重 Pawn）追踪每个 Pawn 的首个 Job 类动作
 - 同一 Pawn：第一个 Job 类动作 `requestQueueing=false`（打断当前任务），后续 `requestQueueing=true`（EnqueueLast 追加）
 - 不同 Pawn：互不影响，全部独立执行
@@ -92,6 +105,23 @@ public class BatchActionIntent
     public Pawn?    Target;
     public string?  Param;
     public string?  Reason;    // 用于调用方显示气泡，Actions 本身不处理
+    public string?  EventId;   // 关联事件 ID，传入 PublishActionEvent
+}
+```
+
+### ActionResult
+
+```csharp
+public struct ActionResult
+{
+    public bool   Success;      // 执行是否成功
+    public string Reason;       // 失败原因（成功时为空）
+    public string ActionName;   // intentId
+    public string TargetLabel;  // target 的 LabelShort（无 target 时为空）
+
+    public static ActionResult Succeeded(string actionName, string targetLabel = "");
+    public static ActionResult Failed(string actionName, string reason, string targetLabel = "");
+    public static implicit operator bool(ActionResult result) => result.Success;
 }
 ```
 
@@ -104,6 +134,7 @@ public interface IActionRule
     string DisplayName { get; }        // 显示名称（使用 Translate()）
     RiskLevel RiskLevel { get; }       // 风险等级
     bool IsJobBased => false;          // 是否为 Job 类动作（影响批量执行逻辑）
+    string? ParameterSchema => null;   // JSON Schema，供 tool calling 参数声明
 
     bool Execute(Pawn actor, Pawn? target, string? param, bool requestQueueing = false);
 }
@@ -122,6 +153,22 @@ public interface IActionRule
 | Medium | 生存/社交/工作类轻微副作用 | force_rest, draft, tend_pawn, rescue_pawn, eat_food, set_work_priority, social_dining, social_relax, give_item, romance_accept, add_thought |
 | High | 重大行为改变 | arrest_pawn, drop_weapon, romance_breakup, recruit_agree, adjust_faction, inspire_work, inspire_fight, inspire_trade |
 | Critical | 不可逆或影响全局 | trigger_mental_state, trigger_incident |
+
+### ActionsBridge
+
+`ActionsBridge` 实现 `IAgentActionBridge`，将 Actions 的 RiskLevel 映射为 Core 的 RiskLevel：
+
+```csharp
+// 安全映射：使用 switch 表达式而非整数强转
+return actionsRisk switch
+{
+    RiskLevel.Low      => Core.Agent.RiskLevel.Low,
+    RiskLevel.Medium   => Core.Agent.RiskLevel.Medium,
+    RiskLevel.High     => Core.Agent.RiskLevel.High,
+    RiskLevel.Critical => Core.Agent.RiskLevel.Critical,
+    _ => Core.Agent.RiskLevel.High
+};
+```
 
 ### 内置动作清单（25 个）
 
@@ -148,16 +195,16 @@ public interface IActionRule
 |----------|------|-----|------|-------|--------|----------|
 | social_dining | Medium | - | 社交聚餐 | - | 目标小人 | 优先 ShareMeal 互动，fallback ChatFriendly；检查 CanInteractNowWith；双方获得 Catharsis thought |
 | social_relax | Medium | - | 社交休闲 | - | - | 给 actor Catharsis thought + 设置当前小时 Timetable 为 Joy |
-| give_item | Medium | - | 赠送物品 | 物品关键词（大小写不敏感匹配 Label 或 defName） | 受赠小人 | 从 actor 背包找物品，掉落在 target 附近（非 actor 脚下） |
+| give_item | Medium | - | 赠送物品 | 物品关键词（大小写不敏感匹配 Label 或 defName） | 受赠小人 | 从 actor 背包找物品，`TryTransferToContainer` 直接转入 target 背包 |
 | romance_accept | Medium | Y | 发起恋爱 | - | 目标小人 | 距离内直接 TryInteractWith(RomanceAttempt)；距离外先 Goto |
 | romance_breakup | High | Y | 分手 | - | 目标小人 | 距离内直接 TryInteractWith(Breakup)；距离外先 Goto |
 
 #### MoodActions（5 个）
 | intentId | 风险 | Job | 说明 | param | target | 实现要点 |
 |----------|------|-----|------|-------|--------|----------|
-| inspire_work | High | - | 触发工作灵感（Frenzy_Work） | - | - | TryStartInspiration |
-| inspire_fight | High | - | 触发战斗灵感（Frenzy_Shoot） | - | - | TryStartInspiration |
-| inspire_trade | High | - | 触发交易灵感（Inspired_Trade） | - | - | TryStartInspiration |
+| inspire_work | High | - | 触发工作灵感（Frenzy_Work） | - | 可选（默认对 actor） | `target ?? actor`；TryStartInspiration |
+| inspire_fight | High | - | 触发战斗灵感（Frenzy_Shoot） | - | 可选（默认对 actor） | `target ?? actor`；TryStartInspiration |
+| inspire_trade | High | - | 触发交易灵感（Inspired_Trade） | - | 可选（默认对 actor） | `target ?? actor`；TryStartInspiration |
 | add_thought | Medium | - | 添加 Thought | ThoughtDef defName | - | 使用 GetNamedSilentFail |
 | trigger_mental_state | Critical | - | 触发精神崩溃 | MentalStateDef defName | - | **安全限制**：仅对玩家殖民者（Faction==OfPlayer）、非战斗中（!InMentalState）触发 |
 
@@ -171,6 +218,25 @@ public interface IActionRule
 | intentId | 风险 | Job | 说明 | param | target | 实现要点 |
 |----------|------|-----|------|-------|--------|----------|
 | trigger_incident | Critical | - | 触发事件 | IncidentDef defName | - | 检查 CanFireNow → TryExecute；parms.forced=true；地图取 actor.Map ?? Find.AnyPlayerHomeMap |
+
+### ActionHelper（PawnActions.cs 内）
+
+共享工具类，提取了坐标解析等公共逻辑：
+
+```csharp
+internal static class ActionHelper
+{
+    internal static IntVec3? ParseCell(string s)
+    {
+        var parts = s.Split(',');
+        if (parts.Length == 2 &&
+            int.TryParse(parts[0].Trim(), out int x) &&
+            int.TryParse(parts[1].Trim(), out int z))
+            return new IntVec3(x, 0, z);
+        return null;
+    }
+}
+```
 
 ### WorkTargetInfo（PawnActions.cs 内）
 
@@ -208,18 +274,19 @@ Advisor 或其他调用方
     ├── RimMindActionsAPI.ExecuteBatch(intents)
     │       ▼
     ├── 遍历 intents：
+    │   ├── 检查 actor != null
+    │   ├── 检查 enableActions
     │   ├── 查找 IActionRule（找不到则 Warning 跳过）
+    │   ├── 检查 ShouldSkipAction（Core 桥接跳过检查）
+    │   ├── 检查 IsAllowed（玩家设置禁用则跳过）
     │   ├── 判断 IsJobBased
     │   │   ├── true → 同 Pawn 首个 requestQueueing=false，后续=true
     │   │   └── false → requestQueueing 无效，直接执行
     │   └── rule.Execute(actor, target, param, requestQueueing)
     │           ▼
     │       生成 Job 或直接修改状态
-    └── 返回成功执行条数
-
-注意：ExecuteBatch 不检查 ShouldSkipAction / IsAllowed，
-这些检查仅在单条 Execute() 中执行。
-批量调用方（如 Advisor）应自行在调用前过滤。
+    │   └── PublishActionEvent → AgentBus
+    └── 返回成功执行条数 / ActionResult 列表
 ```
 
 ## 延迟执行队列
@@ -244,14 +311,15 @@ DelayedActionQueue.Instance.CancelForPawn(pawn);
 List<string> debugInfo = DelayedActionQueue.Instance.GetPendingDebugInfo();
 ```
 
-**PendingAction 记录**：`Id`(GUID), `IntentId`, `Actor`, `Target`, `Param`, `Reason`, `TimeRemaining`, `IsCancelled`, `RiskLevel`
+**PendingAction 记录**：`IntentId`, `Actor`, `Target`, `Param`, `Reason`, `TicksRemaining`, `IsCancelled`, `RiskLevel`
 
 **关键行为**：
-- Tick 频率：60 ticks/s（`dt = 1f/60f`）
+- Tick 频率：60 ticks/s
 - 自动清理：Actor 为 null / Dead / Destroyed / IsCancelled 的条目
 - 到期执行：调用 `RimMindActionsAPI.Execute()`，异常被 catch 并 Log.Error
 - **不跨存档持久化**：`ExposeData()` 为空，加载存档时队列自然清空，Advisor 下次 tick 重新评估
 - 单例模式：`_instance` 在构造函数中赋值，通过 `DelayedActionQueue.Instance` 访问
+- **当前状态**：仅 Debug 动作调用，Advisor/Dialogue 等模块尚未集成
 
 ## 代码约定
 
@@ -259,8 +327,8 @@ List<string> debugInfo = DelayedActionQueue.Instance.GetPendingDebugInfo();
 
 | 命名空间 | 内容 |
 |----------|------|
-| `RimMind.Actions` | 顶层（Mod 入口、API、Settings、IActionRule、RiskLevel、BatchActionIntent、ReferenceEqualityComparer） |
-| `RimMind.Actions.Actions` | 动作实现 + WorkTargetInfo |
+| `RimMind.Actions` | 顶层（Mod 入口、API、Settings、IActionRule、RiskLevel、ActionResult、BatchActionIntent、ReferenceEqualityComparer） |
+| `RimMind.Actions.Actions` | 动作实现 + ActionHelper + WorkTargetInfo |
 | `RimMind.Actions.Queue` | 延迟队列 + PendingAction |
 | `RimMind.Actions.Debug` | 调试动作 |
 
@@ -268,7 +336,7 @@ List<string> debugInfo = DelayedActionQueue.Instance.GetPendingDebugInfo();
 
 1. **前置条件检查**：Execute 开头检查 actor.Dead、actor.Downed、actor.Map 等
 2. **参数解析**：使用 `string.IsNullOrEmpty(param)` 和 `param.Split(',')`
-3. **坐标解析**：各动作内私有 `ParseCell(string)` 方法（目前 ForceRestAction 和 AssignWorkAction 各有一份，未提取公共方法）
+3. **坐标解析**：使用共享的 `ActionHelper.ParseCell(string)` 方法
 4. **Job 生成**：使用 `JobMaker.MakeJob()`，避免直接 new Job
 5. **队列控制**：Job 类动作调用 `pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, requestQueueing)`
 6. **Def 查找**：使用 `DefDatabase<T>.GetNamedSilentFail(defName)` 避免 Def 不存在时报错；社交/恋爱动作使用 `GetNamed(defName, false)` 查找 InteractionDef
@@ -289,6 +357,9 @@ public override void ExposeData()
     var list = new List<string>(DisabledIntents);
     Scribe_Collections.Look(ref list, "disabledIntents", LookMode.Value);
     DisabledIntents = list != null ? new HashSet<string>(list) : new HashSet<string>();
+    Scribe_Values.Look(ref enableActions, "enableActions", true);
+    Scribe_Values.Look(ref delayedQueueMaxSize, "delayedQueueMaxSize", 50);
+    Scribe_Values.Look(ref delayedQueueDefaultDelay, "delayedQueueDefaultDelay", 1.5f);
 }
 ```
 
@@ -313,6 +384,8 @@ public class MyCustomAction : IActionRule
     public string DisplayName => "RimMind.Actions.DisplayName.MyCustomAction".Translate();
     public RiskLevel RiskLevel => RiskLevel.Medium;
     public bool IsJobBased => true;
+    public string? ParameterSchema =>
+        "{\"type\":\"object\",\"properties\":{\"param\":{\"type\":\"string\",\"description\":\"...\"}},\"required\":[]}";
 
     public bool Execute(Pawn actor, Pawn? target, string? param, bool requestQueueing = false)
     {
@@ -365,8 +438,8 @@ RimMind-Advisor
     ├── IsAllowed() 验证动作是否被玩家允许
     │       ▼
     └── 调用 Actions API 执行
-            ├── 单条：Execute()
-            ├── 批量：ExecuteBatch()
+            ├── 单条：Execute() / ExecuteWithResult()
+            ├── 批量：ExecuteBatch() / ExecuteBatchWithResults()
             └── 延迟：DelayedActionQueue.Enqueue()
 ```
 
@@ -401,12 +474,11 @@ Dev 菜单（需开启开发模式）→ RimMind Actions：
 
 ## 注意事项
 
-1. **线程安全**：所有游戏 API 调用必须在主线程执行，后台线程使用 `DelayedActionQueue`
+1. **线程安全**：所有游戏 API 调用必须在主线程执行，后台线程使用 `DelayedActionQueue`。注意 `DelayedActionQueue.Enqueue` 中的 `Rand.Value` 仍存在线程安全问题
 2. **Pawn 有效性**：Execute 中始终检查 actor.Dead / actor.Downed / actor.Map
 3. **Map 有效性**：涉及地图的操作检查 map != null
 4. **Def 存在性**：使用 `DefDatabase<T>.GetNamedSilentFail(defName)` 避免 Def 不存在时报错；社交/恋爱动作使用 `GetNamed(defName, false)` 查找 InteractionDef
 5. **异常处理**：WorkGiver 扫描（PotentialWorkThingsGlobal/PotentialWorkCellsGlobal/HasJobOnThing/HasJobOnCell）可能抛出异常，需 try-catch 包裹
-6. **ParseCell 重复**：ForceRestAction 和 AssignWorkAction 各有私有 ParseCell，新增坐标解析动作时应注意
-7. **Harmony ID**：`mcocdaa.RimMindActions`，当前无 Patch（PatchAll 保留扩展能力）
-8. **ReferenceEqualityComparer**：ExecuteBatch 内部使用，按对象引用比较 Pawn（不依赖 Pawn.Equals 重写）
-9. **ExecuteBatch 不检查 IsAllowed/ShouldSkipAction**：批量执行直接调用 `rule.Execute()`，跳过单条 Execute 中的 ShouldSkipAction 和 IsAllowed 检查。调用方（如 Advisor）应自行在构建 intents 前过滤
+6. **Harmony ID**：`mcocdaa.RimMindActions`，当前无 Patch（PatchAll 保留扩展能力）
+7. **ReferenceEqualityComparer**：ExecuteBatch 内部使用，按对象引用比较 Pawn（不依赖 Pawn.Equals 重写）
+8. **坐标解析**：统一使用 `ActionHelper.ParseCell`，新增坐标解析动作时直接调用
