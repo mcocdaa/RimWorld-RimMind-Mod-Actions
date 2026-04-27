@@ -39,7 +39,7 @@ Source/
 │   ├── ActionResult.cs           动作执行结果结构体
 │   ├── ActionsBridge.cs          IAgentActionBridge 实现，桥接 Core 与 Actions 的 RiskLevel
 │   ├── PawnActions.cs            小人基础动作（12 个）+ ActionHelper 工具类 + WorkTargetInfo 数据类
-│   ├── SocialActions.cs          社交动作（5 个）
+│   ├── SocialActions.cs          社交动作（4 个）
 │   ├── MoodActions.cs            心情动作（5 个）
 │   ├── RelationActions.cs        派系关系动作（2 个）
 │   └── EventActions.cs           事件动作（1 个）
@@ -81,7 +81,7 @@ bool IsAllowed(string intentId)
 
 **Execute/ExecuteWithResult 流程**：
 1. 检查 `actor == null` → 返回 Failed
-2. 检查 `!Settings.enableActions` → 返回 Failed（"Actions disabled"）
+2. 检查 `!Settings.enableActions` → 返回 Failed（"Actions disabled"，不发布事件）
 3. 查找 `IActionRule`（找不到 → Warning + Failed）
 4. 检查 `RimMindAPI.ShouldSkipAction(intentId)`（Core 桥接跳过检查）
 5. 检查 `!Settings.IsAllowed(intentId)`（玩家设置禁用）
@@ -90,6 +90,7 @@ bool IsAllowed(string intentId)
 
 **ExecuteBatch/ExecuteBatchWithResults 队列逻辑**：
 - 对每个 intent 执行与单条 Execute 相同的检查（enableActions → 查找 rule → ShouldSkipAction → IsAllowed）
+- enableActions 关闭时不发布事件
 - 使用 `ReferenceEqualityComparer`（按对象引用去重 Pawn）追踪每个 Pawn 的首个 Job 类动作
 - 同一 Pawn：第一个 Job 类动作 `requestQueueing=false`（打断当前任务），后续 `requestQueueing=true`（EnqueueLast 追加）
 - 不同 Pawn：互不影响，全部独立执行
@@ -150,8 +151,8 @@ public interface IActionRule
 | 等级 | 含义 | 示例 |
 |------|------|------|
 | Low | 无副作用，可随时撤销 | move_to, cancel_job, assign_work, undraft |
-| Medium | 生存/社交/工作类轻微副作用 | force_rest, draft, tend_pawn, rescue_pawn, eat_food, set_work_priority, social_dining, social_relax, give_item, romance_accept, add_thought |
-| High | 重大行为改变 | arrest_pawn, drop_weapon, romance_breakup, recruit_agree, adjust_faction, inspire_work, inspire_fight, inspire_trade |
+| Medium | 生存/社交/工作类轻微副作用 | force_rest, draft, tend_pawn, rescue_pawn, eat_food, set_work_priority, social_relax, give_item, romance_attempt, add_thought |
+| High | 重大行为改变 | arrest_pawn, drop_weapon, romance_breakup, recruit_agree, adjust_faction, inspire_work, inspire_shoot, inspire_trade |
 | Critical | 不可逆或影响全局 | trigger_mental_state, trigger_incident |
 
 ### ActionsBridge
@@ -159,7 +160,6 @@ public interface IActionRule
 `ActionsBridge` 实现 `IAgentActionBridge`，将 Actions 的 RiskLevel 映射为 Core 的 RiskLevel：
 
 ```csharp
-// 安全映射：使用 switch 表达式而非整数强转
 return actionsRisk switch
 {
     RiskLevel.Low      => Core.Agent.RiskLevel.Low,
@@ -170,7 +170,7 @@ return actionsRisk switch
 };
 ```
 
-### 内置动作清单（25 个）
+### 内置动作清单（24 个）
 
 > **Job** 列：`Y` = IsJobBased=true（调用 TryTakeOrderedJob），`-` = 直接修改状态
 
@@ -190,20 +190,19 @@ return actionsRisk switch
 | set_work_priority | Medium | - | 调整工作优先级 | `WorkType,priority`（0-4） | - | priority 钳位到 [0,4]；检查 workSettings != null |
 | drop_weapon | High | - | 丢弃武器 | - | - | TryDropEquipment 到 actor.Position |
 
-#### SocialActions（5 个）
+#### SocialActions（4 个）
 | intentId | 风险 | Job | 说明 | param | target | 实现要点 |
 |----------|------|-----|------|-------|--------|----------|
-| social_dining | Medium | - | 社交聚餐 | - | 目标小人 | 优先 ShareMeal 互动，fallback ChatFriendly；检查 CanInteractNowWith；双方获得 Catharsis thought |
-| social_relax | Medium | - | 社交休闲 | - | - | 给 actor Catharsis thought + 设置当前小时 Timetable 为 Joy |
+| social_relax | Medium | Y | 社交休闲 | - | 可选（目标小人或自动寻找） | 有 target 时 TryInteractWith(Chitchat)；无 target 时 FindNearbySocializablePawn；设置 Timetable 为 Joy |
 | give_item | Medium | - | 赠送物品 | 物品关键词（大小写不敏感匹配 Label 或 defName） | 受赠小人 | 从 actor 背包找物品，`TryTransferToContainer` 直接转入 target 背包 |
-| romance_accept | Medium | Y | 发起恋爱 | - | 目标小人 | 距离内直接 TryInteractWith(RomanceAttempt)；距离外先 Goto |
-| romance_breakup | High | Y | 分手 | - | 目标小人 | 距离内直接 TryInteractWith(Breakup)；距离外先 Goto |
+| romance_attempt | Medium | Y | 发起恋爱 | - | 目标小人 | 距离内直接 TryInteractWith(RomanceAttempt)；距离外先 Goto 并返回 false |
+| romance_breakup | High | Y | 分手 | - | 目标小人 | 距离内直接 TryInteractWith(Breakup)；距离外先 Goto 并返回 false |
 
 #### MoodActions（5 个）
 | intentId | 风险 | Job | 说明 | param | target | 实现要点 |
 |----------|------|-----|------|-------|--------|----------|
 | inspire_work | High | - | 触发工作灵感（Frenzy_Work） | - | 可选（默认对 actor） | `target ?? actor`；TryStartInspiration |
-| inspire_fight | High | - | 触发战斗灵感（Frenzy_Shoot） | - | 可选（默认对 actor） | `target ?? actor`；TryStartInspiration |
+| inspire_shoot | High | - | 触发射击灵感（Frenzy_Shoot） | - | 可选（默认对 actor） | `target ?? actor`；TryStartInspiration |
 | inspire_trade | High | - | 触发交易灵感（Inspired_Trade） | - | 可选（默认对 actor） | `target ?? actor`；TryStartInspiration |
 | add_thought | Medium | - | 添加 Thought | ThoughtDef defName | - | 使用 GetNamedSilentFail |
 | trigger_mental_state | Critical | - | 触发精神崩溃 | MentalStateDef defName | - | **安全限制**：仅对玩家殖民者（Faction==OfPlayer）、非战斗中（!InMentalState）触发 |
@@ -212,7 +211,7 @@ return actionsRisk switch
 | intentId | 风险 | Job | 说明 | param | target | 实现要点 |
 |----------|------|-----|------|-------|--------|----------|
 | recruit_agree | High | - | 同意招募 | - | 招募者（recruiter） | actor 为被招募 NPC；从 Lord 移除 → SetFaction(OfPlayer) → 清除 guest 状态 → 发送招募成功信件 |
-| adjust_faction | High | - | 修改派系关系 | `FactionDef,delta`（delta 钳位 [-100,100]） | - | 不允许修改玩家自身派系 |
+| adjust_faction | High | - | 修改派系关系 | `FactionDef,delta`（delta 钳位 [-100,100]）或纯 `delta`（使用 target 的派系） | 可选（取其 Faction） | 不允许修改玩家自身派系 |
 
 #### EventActions（1 个）
 | intentId | 风险 | Job | 说明 | param | target | 实现要点 |
@@ -275,7 +274,7 @@ Advisor 或其他调用方
     │       ▼
     ├── 遍历 intents：
     │   ├── 检查 actor != null
-    │   ├── 检查 enableActions
+    │   ├── 检查 enableActions（关闭时不发布事件）
     │   ├── 查找 IActionRule（找不到则 Warning 跳过）
     │   ├── 检查 ShouldSkipAction（Core 桥接跳过检查）
     │   ├── 检查 IsAllowed（玩家设置禁用则跳过）
@@ -301,7 +300,7 @@ DelayedActionQueue.Instance.Enqueue(
     target: null,          // 可选，目标小人
     param: null,           // 可选，附加参数
     reason: "AI 建议休息",
-    delaySeconds: 1.5f     // 默认延迟，带 ±20% 随机波动
+    delaySeconds: 1.5f     // 默认延迟，带 ±20% 随机波动（在主线程 DrainIncoming 中计算）
 );
 
 // 取消指定小人的所有待执行动作
@@ -317,7 +316,8 @@ List<string> debugInfo = DelayedActionQueue.Instance.GetPendingDebugInfo();
 - Tick 频率：60 ticks/s
 - 自动清理：Actor 为 null / Dead / Destroyed / IsCancelled 的条目
 - 到期执行：调用 `RimMindActionsAPI.Execute()`，异常被 catch 并 Log.Error
-- **不跨存档持久化**：`ExposeData()` 为空，加载存档时队列自然清空，Advisor 下次 tick 重新评估
+- **跨存档持久化**：`ExposeData()` 使用 `Scribe_Collections.Look(ref _queue, "queue", LookMode.Deep)` 序列化队列；Pawn 引用使用 `Scribe_References.Look`，加载后若 Pawn 已销毁则自动清理
+- 线程安全：`Enqueue` 仅操作 ConcurrentQueue（线程安全），jitter 计算在主线程 `DrainIncoming()` 中执行
 - 单例模式：`_instance` 在构造函数中赋值，通过 `DelayedActionQueue.Instance` 访问
 - **当前状态**：仅 Debug 动作调用，Advisor/Dialogue 等模块尚未集成
 
@@ -340,7 +340,7 @@ List<string> debugInfo = DelayedActionQueue.Instance.GetPendingDebugInfo();
 4. **Job 生成**：使用 `JobMaker.MakeJob()`，避免直接 new Job
 5. **队列控制**：Job 类动作调用 `pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, requestQueueing)`
 6. **Def 查找**：使用 `DefDatabase<T>.GetNamedSilentFail(defName)` 避免 Def 不存在时报错；社交/恋爱动作使用 `GetNamed(defName, false)` 查找 InteractionDef
-7. **返回值**：成功返回 true，前置条件不满足返回 false
+7. **返回值**：成功返回 true，前置条件不满足返回 false；Goto 排队但交互未完成时返回 false
 8. **DisplayName**：使用 `"...".Translate()` 绑定翻译键
 
 ### 风险等级标注
@@ -453,9 +453,9 @@ Dev 菜单（需开启开发模式）→ RimMind Actions：
 - Show DelayedActionQueue — 查看延迟队列
 
 **动作测试**（均需先选中小人）：
-- PawnAction 系列：force_rest / assign_work(Mining/Construction/Cooking) / move_to / draft / undraft / cancel_job / set_work_priority / drop_weapon
-- SocialAction 系列：social_relax / social_dining
-- MoodAction 系列：inspire_work/fight/trade / add_thought(Catharsis/SleptOutside) / trigger_mental_state
+- PawnAction 系列：force_rest / assign_work(Mining/Construction/Cooking) / move_to / draft / undraft / cancel_job / set_work_priority / drop_weapon / eat_food / give_item / tend_pawn / rescue_pawn
+- SocialAction 系列：social_relax
+- MoodAction 系列：inspire_work/shoot/trade / add_thought(Catharsis/SleptOutside) / trigger_mental_state
 - RelationAction 系列：adjust_faction(+10/-10)
 - EventAction 系列：trigger_incident(ResourcePodCrash)
 
@@ -474,7 +474,7 @@ Dev 菜单（需开启开发模式）→ RimMind Actions：
 
 ## 注意事项
 
-1. **线程安全**：所有游戏 API 调用必须在主线程执行，后台线程使用 `DelayedActionQueue`。注意 `DelayedActionQueue.Enqueue` 中的 `Rand.Value` 仍存在线程安全问题
+1. **线程安全**：所有游戏 API 调用必须在主线程执行，后台线程使用 `DelayedActionQueue`。jitter 计算已在主线程 `DrainIncoming()` 中执行，`Enqueue` 仅操作 ConcurrentQueue
 2. **Pawn 有效性**：Execute 中始终检查 actor.Dead / actor.Downed / actor.Map
 3. **Map 有效性**：涉及地图的操作检查 map != null
 4. **Def 存在性**：使用 `DefDatabase<T>.GetNamedSilentFail(defName)` 避免 Def 不存在时报错；社交/恋爱动作使用 `GetNamed(defName, false)` 查找 InteractionDef
@@ -482,3 +482,4 @@ Dev 菜单（需开启开发模式）→ RimMind Actions：
 6. **Harmony ID**：`mcocdaa.RimMindActions`，当前无 Patch（PatchAll 保留扩展能力）
 7. **ReferenceEqualityComparer**：ExecuteBatch 内部使用，按对象引用比较 Pawn（不依赖 Pawn.Equals 重写）
 8. **坐标解析**：统一使用 `ActionHelper.ParseCell`，新增坐标解析动作时直接调用
+9. **返回值语义**：Job 类动作中，若交互因距离不足而先排队 Goto，应返回 false（表示动作尚未完成）
