@@ -10,7 +10,7 @@ namespace RimMind.Actions.Actions
         public string IntentId => "social_relax";
         public string DisplayName => "RimMind.Actions.DisplayName.SocialRelax".Translate();
         public RiskLevel RiskLevel => RiskLevel.Medium;
-        public bool IsJobBased => true;
+        public bool IsJobBased => false;
         public string? ParameterSchema =>
             "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\",\"description\":\"Target pawn short name to socialize with\"}},\"required\":[]}";
 

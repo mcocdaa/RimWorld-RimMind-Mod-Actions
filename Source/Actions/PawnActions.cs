@@ -41,7 +41,7 @@ namespace RimMind.Actions.Actions
         /// </summary>
         public bool Execute(Pawn actor, Pawn? target, string? param, bool requestQueueing = false)
         {
-            if (actor.Dead || actor.Downed) return false;
+            if (actor.Dead || actor.Downed || actor.Map == null) return false;
 
             Building_Bed? bed = null;
 
@@ -117,6 +117,7 @@ namespace RimMind.Actions.Actions
         public bool Execute(Pawn actor, Pawn? target, string? param, bool requestQueueing = false)
         {
             if (string.IsNullOrEmpty(param)) return false;
+            if (actor.Map == null) return false;
 
             // 解析 param：拆分 workTypeName 和可选的 @x,z
             string workTypeName;

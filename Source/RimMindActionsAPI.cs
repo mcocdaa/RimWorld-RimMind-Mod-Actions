@@ -277,6 +277,23 @@ namespace RimMind.Actions
             => AssignWorkAction.GetWorkTargets(pawn, workTypeDefName, maxCount);
 
         /// <summary>
+        /// 获取指定意图的提示数据字符串，供 Advisor 构建候选列表 prompt 时使用。
+        /// 返回 null 表示该意图当前不可用（无可用目标等）。
+        /// </summary>
+        /// <param name="pawn">执行小人</param>
+        /// <param name="intentId">意图 ID，如 "eat_food"</param>
+        public static string? GetActionHintData(Pawn pawn, string intentId)
+        {
+            if (intentId == "eat_food")
+            {
+                var foods = EatFoodAction.GetJoyFoodLabels(pawn, 4);
+                if (foods.Count == 0) return null;
+                return string.Join(", ", foods);
+            }
+            return null;
+        }
+
+        /// <summary>
         /// 检查指定意图是否被玩家设置允许执行。
         /// Advisor 可在构建候选列表时调用，过滤掉被禁用的动作。
         /// </summary>
