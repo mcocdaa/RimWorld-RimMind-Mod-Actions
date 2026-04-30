@@ -233,6 +233,26 @@ namespace RimMind.Actions
             return list;
         }
 
+        public static string GetActionListText(Pawn? pawn = null)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("Available actions:");
+            foreach (var kv in _rules)
+            {
+                if (RimMindActionsMod.Settings != null && !RimMindActionsMod.Settings.IsAllowed(kv.Key))
+                    continue;
+                string riskTag = kv.Value.RiskLevel switch
+                {
+                    RiskLevel.High => "[高]",
+                    RiskLevel.Critical => "[危险]",
+                    _ => ""
+                };
+                sb.AppendLine($"- {kv.Key}{riskTag}: {kv.Value.DisplayName}");
+            }
+            string text = sb.ToString().TrimEnd();
+            return text.Length > 1500 ? text.Substring(0, 1500) : text;
+        }
+
         public static List<StructuredTool> GetStructuredTools()
         {
             var tools = new List<StructuredTool>(_rules.Count);
