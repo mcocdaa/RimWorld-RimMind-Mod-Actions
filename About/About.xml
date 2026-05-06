@@ -3,11 +3,11 @@
   <name>RimMind - Actions</name>
   <author>mcocdaa</author>
   <packageId>mcocdaa.RimMindActions</packageId>
-  <modVersion>0.0.1</modVersion>
+  <modVersion>2.0.0</modVersion>
   <supportedVersions>
     <li>1.6</li>
   </supportedVersions>
-  <description>Intent-to-action execution library. Maps AI intent IDs (assign_work, force_rest, recruit_agree, etc.) to concrete RimWorld game operations.</description>
+  <description>Intent-to-action execution library. Maps AI intent IDs (assign_work, force_rest, recruit_agree, etc.) to concrete RimWorld game operations. [v2.0 BREAKING CHANGES]</description>
   <modDependencies>
     <li>
       <packageId>brrainz.harmony</packageId>
