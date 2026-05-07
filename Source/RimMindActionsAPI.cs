@@ -1,7 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using RimMind.Actions.Actions;
 using RimMind.Core;
+using RimMind.Kernel.Bus;
+using RimMind.Core.Client;
 using Verse;
 
 namespace RimMind.Actions
@@ -11,11 +13,12 @@ namespace RimMind.Actions
     /// </summary>
     public class BatchActionIntent
     {
-        public string   IntentId  = "";
-        public Pawn     Actor     = null!;
-        public Pawn?    Target;
-        public string?  Param;
-        public string?  Reason;    // 用于调用方显示气泡，Actions 本身不处理
+        public string IntentId = "";
+        public Pawn Actor = null!;
+        public Pawn? Target;
+        public string? Param;
+        public string? Reason;
+        public string? EventId;
     }
 
     /// <summary>
@@ -34,6 +37,7 @@ namespace RimMind.Actions
         public static void RegisterAction(string intentId, IActionRule rule)
         {
             _rules[intentId] = rule;
+            _ruleVersion++;
         }
 
         // ── 单条执行 ──────────────────────────────────────────
@@ -51,29 +55,66 @@ namespace RimMind.Actions
             Pawn actor,
             Pawn? target = null,
             string? param = null,
-            bool requestQueueing = false)
+            bool requestQueueing = false,
+            string? eventId = null)
         {
+            return ExecuteWithResult(intentId, actor, target, param, requestQueueing, eventId).Success;
+        }
+
+        public static ActionResult ExecuteWithResult(
+            string intentId,
+            Pawn actor,
+            Pawn? target = null,
+            string? param = null,
+            bool requestQueueing = false,
+            string? eventId = null)
+        {
+            string targetLabel = target?.LabelShort ?? "";
+
+            if (actor == null)
+            {
+                var nullResult = ActionResult.Failed(intentId, "Actor is null", targetLabel);
+                PublishActionEvent(actor!, nullResult, eventId);
+                return nullResult;
+            }
+
+            if (RimMindActionsMod.Settings != null && !RimMindActionsMod.Settings.enableActions)
+            {
+                var disabledResult = ActionResult.Failed(intentId, "Actions disabled", targetLabel);
+                return disabledResult;
+            }
+
             if (!_rules.TryGetValue(intentId, out var rule))
             {
                 Log.Warning($"[RimMind-Actions] Unknown intentId: {intentId}");
-                return false;
+                var failResult = ActionResult.Failed(intentId, "Unknown intent", targetLabel);
+                PublishActionEvent(actor, failResult, eventId);
+                return failResult;
             }
 
             if (RimMindAPI.ShouldSkipAction(intentId))
             {
                 Log.Message($"[RimMind-Actions] '{intentId}' skipped by bridge skip check.");
-                return false;
+                var skipResult = ActionResult.Failed(intentId, "Skipped by bridge", targetLabel);
+                PublishActionEvent(actor, skipResult, eventId);
+                return skipResult;
             }
 
-            // 检查玩家设置：该动作是否被允许
             if (RimMindActionsMod.Settings != null &&
                 !RimMindActionsMod.Settings.IsAllowed(intentId))
             {
                 Log.Message($"[RimMind-Actions] '{intentId}' is disabled by player settings, skipping.");
-                return false;
+                var disabledResult = ActionResult.Failed(intentId, "Disabled by player", targetLabel);
+                PublishActionEvent(actor, disabledResult, eventId);
+                return disabledResult;
             }
 
-            return rule.Execute(actor, target, param, requestQueueing);
+            bool ok = rule.Execute(actor, target, param, requestQueueing);
+            var result = ok
+                ? ActionResult.Succeeded(intentId, targetLabel)
+                : ActionResult.Failed(intentId, "Execution failed", targetLabel);
+            PublishActionEvent(actor, result, eventId);
+            return result;
         }
 
         // ── 批量执行 ──────────────────────────────────────────
@@ -92,34 +133,74 @@ namespace RimMind.Actions
         /// <returns>成功执行的条数</returns>
         public static int ExecuteBatch(IReadOnlyList<BatchActionIntent> intents)
         {
-            if (intents == null || intents.Count == 0) return 0;
+            var results = ExecuteBatchWithResults(intents);
+            int success = 0;
+            for (int i = 0; i < results.Count; i++)
+                if (results[i].Success) success++;
+            return success;
+        }
 
-            // 记录每个 Pawn 已处理的第一个 Job 类动作（之后的追加模式）
+        public static List<ActionResult> ExecuteBatchWithResults(IReadOnlyList<BatchActionIntent> intents)
+        {
+            var results = new List<ActionResult>();
+            if (intents == null || intents.Count == 0) return results;
+
             var firstJobSent = new HashSet<Pawn>(ReferenceEqualityComparer.Instance);
-            int successCount = 0;
 
             foreach (var intent in intents)
             {
-                if (!_rules.TryGetValue(intent.IntentId, out var rule))
+                string targetLabel = intent.Target?.LabelShort ?? "";
+
+                if (intent.Actor == null)
                 {
-                    Log.Warning($"[RimMind-Actions] ExecuteBatch: Unknown intentId: {intent.IntentId}");
+                    results.Add(ActionResult.Failed(intent.IntentId, "Actor is null", targetLabel));
                     continue;
                 }
 
-                // 非 Job 类动作（即时效果）直接以 false 执行，不影响队列逻辑
+                if (RimMindActionsMod.Settings != null && !RimMindActionsMod.Settings.enableActions)
+                {
+                    results.Add(ActionResult.Failed(intent.IntentId, "Actions disabled", targetLabel));
+                    continue;
+                }
+
+                if (!_rules.TryGetValue(intent.IntentId, out var rule))
+                {
+                    Log.Warning($"[RimMind-Actions] ExecuteBatch: Unknown intentId: {intent.IntentId}");
+                    results.Add(ActionResult.Failed(intent.IntentId, "Unknown intent", targetLabel));
+                    continue;
+                }
+
+                if (RimMindAPI.ShouldSkipAction(intent.IntentId))
+                {
+                    results.Add(ActionResult.Failed(intent.IntentId, "Skipped by bridge", targetLabel));
+                    PublishActionEvent(intent.Actor, results[results.Count - 1], intent.EventId);
+                    continue;
+                }
+
+                if (RimMindActionsMod.Settings != null &&
+                    !RimMindActionsMod.Settings.IsAllowed(intent.IntentId))
+                {
+                    results.Add(ActionResult.Failed(intent.IntentId, "Disabled by player", targetLabel));
+                    PublishActionEvent(intent.Actor, results[results.Count - 1], intent.EventId);
+                    continue;
+                }
+
                 bool isJobAction = rule.IsJobBased;
                 bool requestQueueing = isJobAction && firstJobSent.Contains(intent.Actor);
 
                 bool ok = rule.Execute(intent.Actor, intent.Target, intent.Param, requestQueueing);
-                if (ok)
-                {
-                    successCount++;
-                    if (isJobAction)
-                        firstJobSent.Add(intent.Actor);
-                }
+                var result = ok
+                    ? ActionResult.Succeeded(intent.IntentId, targetLabel)
+                    : ActionResult.Failed(intent.IntentId, "Execution failed", targetLabel);
+                results.Add(result);
+
+                if (ok && isJobAction)
+                    firstJobSent.Add(intent.Actor);
+
+                PublishActionEvent(intent.Actor, result, intent.EventId);
             }
 
-            return successCount;
+            return results;
         }
 
         // ── 查询 ──────────────────────────────────────────────
@@ -127,9 +208,18 @@ namespace RimMind.Actions
         /// <summary>
         /// 返回所有已注册意图 ID（供 Advisor 构建候选列表）。
         /// </summary>
+        private static List<string>? _cachedIntentList;
+        private static int _cachedIntentVersion;
+        private static int _ruleVersion;
+
         public static IReadOnlyList<string> GetSupportedIntents()
         {
-            return new List<string>(_rules.Keys);
+            if (_cachedIntentList == null || _cachedIntentVersion != _ruleVersion)
+            {
+                _cachedIntentList = new List<string>(_rules.Keys);
+                _cachedIntentVersion = _ruleVersion;
+            }
+            return _cachedIntentList;
         }
 
         /// <summary>
@@ -141,6 +231,45 @@ namespace RimMind.Actions
             foreach (var kv in _rules)
                 list.Add((kv.Key, kv.Value.DisplayName, kv.Value.RiskLevel));
             return list;
+        }
+
+        public static string GetActionListText(Pawn? pawn = null)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("Available actions:");
+            foreach (var kv in _rules)
+            {
+                if (RimMindActionsMod.Settings != null && !RimMindActionsMod.Settings.IsAllowed(kv.Key))
+                    continue;
+                string riskTag = kv.Value.RiskLevel switch
+                {
+                    RiskLevel.High => "[高]",
+                    RiskLevel.Critical => "[危险]",
+                    _ => ""
+                };
+                sb.AppendLine($"- {kv.Key}{riskTag}: {kv.Value.DisplayName}");
+            }
+            string text = sb.ToString().TrimEnd();
+            return text.Length > 1500 ? text.Substring(0, 1500) : text;
+        }
+
+        public static List<StructuredTool> GetStructuredTools()
+        {
+            var tools = new List<StructuredTool>(_rules.Count);
+            foreach (var kv in _rules)
+            {
+                var rule = kv.Value;
+                if (RimMindActionsMod.Settings != null && !RimMindActionsMod.Settings.IsAllowed(rule.IntentId))
+                    continue;
+                tools.Add(new StructuredTool
+                {
+                    Name = rule.IntentId,
+                    Description = rule.DisplayName,
+                    Parameters = rule.ParameterSchema,
+                    ToolChoice = null,
+                });
+            }
+            return tools;
         }
 
         /// <summary>
@@ -168,13 +297,37 @@ namespace RimMind.Actions
             => AssignWorkAction.GetWorkTargets(pawn, workTypeDefName, maxCount);
 
         /// <summary>
+        /// 获取指定意图的提示数据字符串，供 Advisor 构建候选列表 prompt 时使用。
+        /// 返回 null 表示该意图当前不可用（无可用目标等）。
+        /// </summary>
+        /// <param name="pawn">执行小人</param>
+        /// <param name="intentId">意图 ID，如 "eat_food"</param>
+        public static string? GetActionHintData(Pawn pawn, string intentId)
+        {
+            if (intentId == "eat_food")
+            {
+                var foods = EatFoodAction.GetJoyFoodLabels(pawn, 4);
+                if (foods.Count == 0) return null;
+                return string.Join(", ", foods);
+            }
+            return null;
+        }
+
+        /// <summary>
         /// 检查指定意图是否被玩家设置允许执行。
         /// Advisor 可在构建候选列表时调用，过滤掉被禁用的动作。
         /// </summary>
         public static bool IsAllowed(string intentId)
         {
-            if (RimMindActionsMod.Settings == null) return true; // 设置未初始化时放行
+            if (RimMindActionsMod.Settings == null) return true;
             return RimMindActionsMod.Settings.IsAllowed(intentId);
+        }
+
+        private static void PublishActionEvent(Pawn actor, ActionResult result, string? eventId = null)
+        {
+            if (actor == null) return;
+            string npcId = $"NPC-{actor.thingIDNumber}";
+            RimMindAPI.GetEventBus().Publish(new ActionEvent(npcId, actor.thingIDNumber, result.ActionName, result.Success, result.Reason, result.TargetLabel, eventId ?? ""));
         }
 
     }

@@ -11,9 +11,11 @@ namespace RimMind.Actions.Actions
     // ─────────────────────────────────────────────
     public class RecruitAgreeAction : IActionRule
     {
-        public string IntentId    => "recruit_agree";
+        public string IntentId => "recruit_agree";
         public string DisplayName => "RimMind.Actions.DisplayName.RecruitAgree".Translate();
         public RiskLevel RiskLevel => RiskLevel.High;
+        public string? ParameterSchema =>
+            "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\",\"description\":\"Target pawn short name to recruit\"}},\"required\":[\"target\"]}";
 
         public bool Execute(Pawn actor, Pawn? target, string? param, bool requestQueueing = false)
         {
@@ -26,16 +28,16 @@ namespace RimMind.Actions.Actions
 
             try
             {
-                // 从原 Lord 移除
-                recruit.GetLord()?.Notify_PawnLost(recruit, PawnLostCondition.ChangedFaction, null);
+                var lord = recruit.GetLord();
+                if (lord != null)
+                {
+                    lord.RemovePawn(recruit);
+                }
 
-                // 变更派系
                 recruit.SetFaction(Faction.OfPlayer, recruiter);
 
-                // 清除访客状态
                 recruit.guest?.SetGuestStatus(null);
 
-                // 招募成功通知信件
                 Find.LetterStack.ReceiveLetter(
                     "LetterLabelMessageRecruitSuccess".Translate() + ": " + recruit.LabelShort,
                     "MessageRecruitSuccess".Translate(recruiter?.LabelShort ?? "AI", recruit.LabelShort, Faction.OfPlayer.Name),
@@ -46,7 +48,7 @@ namespace RimMind.Actions.Actions
             }
             catch (Exception e)
             {
-                Log.Error($"[RimMind-Actions] recruit_agree failed: {e}");
+                Log.Warning($"[RimMind-Actions] recruit_agree failed: {e}");
                 return false;
             }
         }
@@ -57,23 +59,36 @@ namespace RimMind.Actions.Actions
     // ─────────────────────────────────────────────
     public class AdjustFactionAction : IActionRule
     {
-        public string IntentId    => "adjust_faction";
+        public string IntentId => "adjust_faction";
         public string DisplayName => "RimMind.Actions.DisplayName.AdjustFaction".Translate();
         public RiskLevel RiskLevel => RiskLevel.High;
+        public string? ParameterSchema =>
+            "{\"type\":\"object\",\"properties\":{\"param\":{\"type\":\"string\",\"description\":\"Format: FactionDef,delta (e.g. Outlander,-20) or just delta (e.g. +10,-5) when target pawn's faction is used. Delta range: -100 to 100\"},\"target\":{\"type\":\"string\",\"description\":\"Target pawn short name - will adjust goodwill with this pawn's faction\"}},\"required\":[\"param\"]}";
 
         public bool Execute(Pawn actor, Pawn? target, string? param, bool requestQueueing = false)
         {
             if (string.IsNullOrEmpty(param)) return false;
 
+            int delta;
+            Faction? faction = null;
+
             var parts = param!.Split(',');
-            if (parts.Length < 2 || !int.TryParse(parts[1].Trim(), out int delta))
+            if (parts.Length >= 2 && int.TryParse(parts[1].Trim(), out delta))
             {
-                Log.Warning($"[RimMind-Actions] adjust_faction: bad param '{param}' (expected 'FactionDef,delta')");
+                var factionDef = DefDatabase<FactionDef>.GetNamedSilentFail(parts[0].Trim());
+                faction = Find.FactionManager.FirstFactionOfDef(factionDef);
+            }
+            else if (int.TryParse(parts[0].Trim(), out delta))
+            {
+                if (target != null)
+                    faction = target.Faction;
+            }
+            else
+            {
+                Log.Warning($"[RimMind-Actions] adjust_faction: bad param '{param}' (expected 'FactionDef,delta' or just 'delta')");
                 return false;
             }
 
-            var faction = Find.FactionManager.FirstFactionOfDef(
-                DefDatabase<FactionDef>.GetNamedSilentFail(parts[0].Trim()));
             if (faction == null || faction == Faction.OfPlayer) return false;
 
             delta = Math.Min(Math.Max(delta, -100), 100);
