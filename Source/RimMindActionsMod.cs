@@ -1,7 +1,7 @@
 using HarmonyLib;
 using RimMind.Actions.Actions;
 using RimMind.Core;
-using RimMind.Core.UI;
+using RimMind.Adapters.UI;
 using UnityEngine;
 using Verse;
 
