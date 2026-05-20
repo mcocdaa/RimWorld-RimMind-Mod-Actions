@@ -8,6 +8,8 @@ namespace RimMind.Actions
     [Obsolete("ActionsBridge is deprecated. Use RimMindAPI.Tools instead.")]
     public class ActionsBridge : IAgentActionBridge
     {
+        public string Id => "ActionsBridge";
+
         [Obsolete]
         public void ExecuteAction(string npcId, string actionName, string[]? args = null) { }
 
