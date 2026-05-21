@@ -9,6 +9,7 @@ namespace RimMind.Actions
     public class ActionsBridge : IAgentActionBridge
     {
         public string Id => "ActionsBridge";
+        public string OwnerModId => "RimMindActions";
 
         [Obsolete]
         public void ExecuteAction(string npcId, string actionName, string[]? args = null) { }
